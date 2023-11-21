@@ -1,11 +1,10 @@
-#define _WINSOCK_DEPRECATED_NO_WARNINGS
 #define WIN32_LEAN_AND_MEAN
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
 
 #include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <stdlib.h>
-#include <string.h>
 #include <stdio.h>
 #include "conio.h"
 
@@ -13,140 +12,116 @@
 #pragma comment (lib, "Mswsock.lib")
 #pragma comment (lib, "AdvApi32.lib")
 
-#define BUFFER_SIZE 512
-#define SERVER_ADDRESS "127.0.0.1"
+#define SERVER_IP_ADDRESS "127.0.0.1"
+#define SERVER_PORT 19015
+#define BUFFER_SIZE 256
+#define Velicina 512
 
-struct Merenje
-{
-	char nazivGrada[20];
-	short indeksKvalitetaVazduha;
+struct Merenje {
+	char nazivGrada[21];
+	short indexKvalitetaVazduha;
 };
 
 int main()
 {
-	int iResult;
-	short port;
-	char bafer[BUFFER_SIZE];
-	WSADATA wsaData;
+	SOCKET connectSocket = INVALID_SOCKET;
 
+	int iResult;
+
+	char dataBuffer[BUFFER_SIZE];
+
+	WSADATA wsaData;
 	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
 	{
-		printf("Error starting WSA (%d)!\n", WSAGetLastError());
+		printf("WSAStartup failed with error: %d\n", WSAGetLastError());
 		return 1;
 	}
 
-	SOCKET serverSocket = INVALID_SOCKET;
-
-	serverSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-
-	if (serverSocket == INVALID_SOCKET)
+	connectSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (connectSocket == INVALID_SOCKET)
 	{
-		printf("Error creating socket (%d)!\n", WSAGetLastError());
+		printf("socket failed with error: %ld\n", WSAGetLastError());
 		WSACleanup();
 		return 1;
 	}
 
-	sockaddr_in serverAdress;
-	int serverAddrLen = sizeof(serverAdress);
+	// Create and initialize address structure
+	sockaddr_in serverAddress;
+	serverAddress.sin_family = AF_INET;								// IPv4 protocol
+	serverAddress.sin_addr.s_addr = inet_addr(SERVER_IP_ADDRESS);		// ip address of server
+	serverAddress.sin_port = htons(SERVER_PORT);					// server port
 
-	memset(&serverAdress, 0, sizeof(serverAdress));
-	serverAdress.sin_family = AF_INET;
-	serverAdress.sin_addr.s_addr = inet_addr(SERVER_ADDRESS);
-
-	printf("Unesite port (19000 ili 19001): ");
-	gets_s(bafer, BUFFER_SIZE);
-
-	port = atoi(bafer);
-
-	serverAdress.sin_port = htons(port);
-
-	strcpy_s(bafer, "Prijava");
-	iResult = sendto(serverSocket, bafer, strlen(bafer), 0, (SOCKADDR*)&serverAdress, sizeof(serverAdress));
-
+	iResult = connect(connectSocket, (SOCKADDR*)&serverAddress, sizeof(serverAddress));
 	if (iResult == SOCKET_ERROR)
 	{
-		printf("Error sending data to socket (%d)!\n", WSAGetLastError());
-		closesocket(serverSocket);
+		printf("Unable to connect to server.\n");
+		closesocket(connectSocket);
 		WSACleanup();
 		return 1;
 	}
 
-	// povratna poruka da je prijava uspesna
-	iResult = recvfrom(serverSocket, bafer, BUFFER_SIZE, 0, (SOCKADDR*)&serverAdress, &serverAddrLen);
-
+	iResult = recv(connectSocket, dataBuffer, BUFFER_SIZE, 0);
 	if (iResult == SOCKET_ERROR)
 	{
-		printf("Error receiving data from socket (%d)!\n", WSAGetLastError());
-		closesocket(serverSocket);
+		printf("send failed with error: %d\n", WSAGetLastError());
+		closesocket(connectSocket);
 		WSACleanup();
 		return 1;
 	}
 
-	bafer[iResult] = '\0';
+	printf("Poruka primljena od Servera: %s\n", dataBuffer);
+	memset(&dataBuffer, 0, BUFFER_SIZE);
 
-	printf("Server: %s\n", bafer);
-	//ovde sto bude prije while tamo se desava u prvom do while-u
-	//ugl uspostavljanje konekcije
+	Merenje jedanUzorak;
+	short index;
+	char end[Velicina];
 
 	while (true)
 	{
-		Merenje m;
+		// Unos potrebnih podataka koji ce se poslati serveru
+		printf("Unesite naziv grada: ");
+		gets_s(jedanUzorak.nazivGrada, 21);
 
-		printf("\nUnesite grad: ");
-		gets_s(bafer, BUFFER_SIZE);
+		printf("Unesite index kvaliteta vazduha: ");
+		scanf_s("%d", &index);
+		getchar();    //pokupiti enter karakter iz bafera tastature
+		jedanUzorak.indexKvalitetaVazduha = index;
 
-		strcpy_s(m.nazivGrada, bafer);
-
-		printf("Unesite indeks zagadjenosti: ");
-		gets_s(bafer, BUFFER_SIZE);
-
-		short zagadjen = atoi(bafer);
-		m.indeksKvalitetaVazduha = htons(zagadjen); // priprema za slanje na mrezu
-
-		iResult = sendto(serverSocket, (char*)&m, sizeof(Merenje), 0, (SOCKADDR*)&serverAdress, sizeof(serverAdress));
-
+		iResult = send(connectSocket, (char*)&jedanUzorak, (int)sizeof(jedanUzorak), 0);
 		if (iResult == SOCKET_ERROR)
 		{
-			printf("Error sending data to socket (%d)!\n", WSAGetLastError());
-			closesocket(serverSocket);
+			printf("send failed with error: %d\n", WSAGetLastError());
+			closesocket(connectSocket);
 			WSACleanup();
 			return 1;
 		}
 
-		// prijem poruke od servera o uneto ili odbaceno
-		iResult = recvfrom(serverSocket, bafer, BUFFER_SIZE, 0, (SOCKADDR*)&serverAdress, &serverAddrLen);
+		printf("Message successfully sent. Total bytes: %ld\n", iResult);
 
-		if (iResult == SOCKET_ERROR)
-		{
-			printf("Error receiving data from socket (%d)!\n", WSAGetLastError());
-			closesocket(serverSocket);
-			WSACleanup();
-			return 1;
-		}
+		iResult = recv(connectSocket, dataBuffer, BUFFER_SIZE, 0);
+		if (iResult > 0)
+        {
+			dataBuffer[iResult] = '\0';
+			printf("\nPrimljena poruka je: %s\n", dataBuffer);
+        }
 
-		bafer[iResult] = '\0';
-
-		// ispis poruke
-		printf("Merenje je: %s!\n", bafer);
-
-		printf("Unesite 'Kraj' ili pritisnite bilo koji taster za nastavak: ");
-		gets_s(bafer, BUFFER_SIZE);
-
-		if (strcmp(bafer, "Kraj") == 0)
-		{
-			printf("Closing connection...");
+		printf("\nAko zelite da zavrsite unesite 'Kraj': \n");
+		gets_s(end, Velicina);
+		if (strcmp(end, "Kraj") == 0) {
 			break;
 		}
 	}
 
-	iResult = closesocket(serverSocket);
-
+	iResult = shutdown(connectSocket, SD_BOTH);
 	if (iResult == SOCKET_ERROR)
 	{
-		printf("Error closing socket (%d)!\n", WSAGetLastError());
+		printf("Shutdown failed with error: %d\n", WSAGetLastError());
+		closesocket(connectSocket);
 		WSACleanup();
 		return 1;
 	}
+
+	closesocket(connectSocket);
 
 	WSACleanup();
 

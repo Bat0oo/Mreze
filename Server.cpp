@@ -1,5 +1,4 @@
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
-
 #define WIN32_LEAN_AND_MEAN
 
 #include <windows.h>
@@ -8,385 +7,454 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "conio.h"
+#include <string.h>
 
 #pragma comment (lib, "Ws2_32.lib")
 #pragma comment (lib, "Mswsock.lib")
 #pragma comment (lib, "AdvApi32.lib")
 
-#define BUFFER_SIZE 512
+#define SERVER_PORT 19015
+#define BUFFER_SIZE 256
 
-struct Merenje
-{
-	char nazivGrada[20];
-	short indeksKvalitetaVazduha;
+// Structura kojom se simulira merenjS
+struct Merenje {
+	char nazivGrada[21];
+	short indexKvalitetaVazduha;
 };
-
-#define PORT1 19000
-#define PORT2 19001
-#define MAX_CLIENTS 2
 
 int main()
 {
+	SOCKET listenSocket = INVALID_SOCKET;
+
+	SOCKET acceptedSocket1 = INVALID_SOCKET;
+	SOCKET acceptedSocket2 = INVALID_SOCKET;
+
 	int iResult;
-	char bafer[BUFFER_SIZE], bafer1[BUFFER_SIZE], bafer2[BUFFER_SIZE];
-	int connectedClients = 0;
-	int lastIndex = 0;
+
+	char dataBuffer1[BUFFER_SIZE];
+	char dataBuffer2[BUFFER_SIZE];
+
 	WSADATA wsaData;
-
-	Merenje spisak[10];
-
-	// reset strutkrue
-	for (int i = 0; i < 10; i++)
-	{
-		memset(spisak[i].nazivGrada, 0, 20); //jer je nazivgrada max duzine 20, u strukturi tako pise
-		spisak[i].indeksKvalitetaVazduha = 0;
-	}
-
 	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
 	{
-		printf("Error starting WSA (%d)!\n", WSAGetLastError());
+		printf("WSAStartup failed with error: %d\n", WSAGetLastError());
 		return 1;
 	}
 
-	sockaddr_in serverAddress[2];
 
-	memset(serverAddress, 0, sizeof(serverAddress)); //ne zaboraviti ovo
-	memset(bafer, 0, BUFFER_SIZE);
-	memset(bafer2, 0, BUFFER_SIZE);
+	sockaddr_in serverAddress;
+	memset((char*)&serverAddress, 0, sizeof(serverAddress));
+	serverAddress.sin_family = AF_INET;				// IPv4 address family
+	serverAddress.sin_addr.s_addr = INADDR_ANY;		// Use all available addresses
+	serverAddress.sin_port = htons(SERVER_PORT);	// Use specific port
 
-	//prva merna stanica
-	serverAddress[0].sin_family = AF_INET;
-	serverAddress[0].sin_addr.s_addr = INADDR_ANY;
-	serverAddress[0].sin_port = htons(PORT1);
 
-	// druga merna stanica
-	serverAddress[1].sin_family = AF_INET;
-	serverAddress[1].sin_addr.s_addr = INADDR_ANY;
-	serverAddress[1].sin_port = htons(PORT2);
-
-	// kreiranje uticnica
-	SOCKET serverSocket[2];
-	serverSocket[0] = INVALID_SOCKET;
-	serverSocket[0] = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-
-	if (serverSocket[0] == INVALID_SOCKET)
+	listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (listenSocket == INVALID_SOCKET)
 	{
-		printf("Error creating socket (%d)!\n", WSAGetLastError());
+		printf("socket failed with error: %ld\n", WSAGetLastError());
 		WSACleanup();
 		return 1;
 	}
 
-	// bind serverskih uticnica
-	iResult = bind(serverSocket[0], (SOCKADDR*)&serverAddress[0], sizeof(serverAddress[0]));
+	iResult = bind(listenSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress));
 
 	if (iResult == SOCKET_ERROR)
 	{
-		printf("Error binding socket 1 (%d)!\n", WSAGetLastError());
-		closesocket(serverSocket[0]);
+		printf("bind failed with error: %d\n", WSAGetLastError());
+		closesocket(listenSocket);
 		WSACleanup();
 		return 1;
 	}
 
-	// druga uticnica
-	serverSocket[1] = INVALID_SOCKET;
-	serverSocket[1] = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-
-	if (serverSocket[1] == INVALID_SOCKET)
-	{
-		printf("Error creating socket 2 (%d)!\n", WSAGetLastError());
-		WSACleanup();
-		return 1;
-	}
-
-	iResult = bind(serverSocket[1], (SOCKADDR*)&serverAddress[1], sizeof(serverAddress[1]));
-
+	iResult = listen(listenSocket, SOMAXCONN);
 	if (iResult == SOCKET_ERROR)
 	{
-		printf("Error binding socket 2 (%d)!\n", WSAGetLastError());
-		closesocket(serverSocket[0]);
-		closesocket(serverSocket[1]);
+		printf("listen failed with error: %d\n", WSAGetLastError());
+		closesocket(listenSocket);
 		WSACleanup();
 		return 1;
 	}
 
-	printf("\nUDP Server started...\n\n");
+	printf("Server socket is set to listening mode. Waiting for new connection requests.\n");
 
-	// klijenti
-	sockaddr_in clients[2];  //msm da ove 3 linije ne trebaju uopste, jer dole su adrese
-	int clientsSize = sizeof(struct sockaddr_in);
-	//isto je da li je sizeof struc ili sizeof sockaddr
-	memset(clients, 0, 2 * sizeof(sockaddr_in));
+	Merenje* jedanUzorak1;
+	Merenje* jedanUzorak2;
+	int i = 0;	// brojac za prvog klijenta
+	int x = 0;	// brojac za drugog klijenta
 
-	int connected = 0;
+	Merenje prikuljeniPodaci1[4];
+	memset(&prikuljeniPodaci1, 0, 4*sizeof(Merenje));
 
-	// KLIJENTI
-	sockaddr_in clientAddr[2];
-	int clientAddrSize[2] = { sizeof(struct sockaddr_in),  sizeof(struct sockaddr_in) }; //stavljamo i na 0 i na 1 mjesto sizeof strukture
-																						//cak mislim da nema potrebe za ovo, duzina je ista
+	Merenje prikuljeniPodaci2[4];
+	memset(&prikuljeniPodaci2, 0, 4*sizeof(Merenje));
 
-	memset(&clientAddr, 0, sizeof(sockaddr_in)); //stavljamo na nulu adrese, inicijalizacija
-	memset(bafer, 0, BUFFER_SIZE);
 
-	// polling model
-	do
+	sockaddr_in clientAddr1;	// za informacije o klijentu 1
+	sockaddr_in clientAddr2;	// za informacije o klijentu 2
+	int clientAddrSize = sizeof(struct sockaddr_in);
+
+do{
+	acceptedSocket1 = accept(listenSocket, (struct sockaddr*)&clientAddr1, &clientAddrSize);
+	if (acceptedSocket1 == INVALID_SOCKET)
 	{
-		iResult = recvfrom(serverSocket[connected], bafer, BUFFER_SIZE, 0, (SOCKADDR*)&clientAddr[connected], &clientAddrSize[connected]);
+		printf("accept failed with error: %d\n", WSAGetLastError());
+		closesocket(listenSocket);
+		WSACleanup();
+		return 1;
+	}
 
-		if (iResult != SOCKET_ERROR)
+	printf("\nFirst client request accepted. Client address: %s : %d\n", inet_ntoa(clientAddr1.sin_addr), ntohs(clientAddr1.sin_port));
+
+	acceptedSocket2 = accept(listenSocket, (struct sockaddr*)&clientAddr2, &clientAddrSize);
+	if (acceptedSocket2 == INVALID_SOCKET)
+	{
+		printf("accept failed with error: %d\n", WSAGetLastError());
+		closesocket(listenSocket);
+		closesocket(acceptedSocket1);
+		WSACleanup();
+		return 1;
+	}
+
+	printf("\nSecond client request accepted. Client address: %s : %d\n", inet_ntoa(clientAddr2.sin_addr), ntohs(clientAddr2.sin_port));
+
+	// Saljemo poruku da je povezivanje uspesno
+	char s[33] = "Uspesno povezivanje sa serverom!";
+
+	iResult = send(acceptedSocket1, s, sizeof(s), 0);
+	if (iResult == SOCKET_ERROR)
+	{
+		printf("send failed with error: %d\n", WSAGetLastError());
+		shutdown(acceptedSocket1, SD_BOTH);
+		shutdown(acceptedSocket2, SD_BOTH);
+		closesocket(acceptedSocket1);
+		closesocket(acceptedSocket2);
+	}
+
+	iResult = send(acceptedSocket2, s, sizeof(s), 0);
+	if (iResult == SOCKET_ERROR)
+	{
+		printf("send failed with error: %d\n", WSAGetLastError());
+		shutdown(acceptedSocket1, SD_BOTH);
+		shutdown(acceptedSocket2, SD_BOTH);
+		closesocket(acceptedSocket1);
+		closesocket(acceptedSocket2);
+	}
+
+	// Postavljanje uticnica namenjenih klijentima u neblokirajuci rezim
+	unsigned long mode = 1; //non-blocking mode
+	iResult = ioctlsocket(acceptedSocket1, FIONBIO, &mode);
+	if (iResult != NO_ERROR)
+		printf("ioctlsocket failed with error: %ld\n", iResult);
+
+	iResult = ioctlsocket(acceptedSocket2, FIONBIO, &mode);
+	if (iResult != NO_ERROR)
+		printf("ioctlsocket failed with error: %ld\n", iResult);
+
+	while(true)
+	{
+		iResult = recv(acceptedSocket1, dataBuffer1, BUFFER_SIZE, 0);
+
+		if (iResult > 0)
 		{
-			printf("\nNovi klijent: %s : %d\n", inet_ntoa(clientAddr[connected].sin_addr), ntohs(clientAddr[connected].sin_port));
+			if (i < 4) {
+				dataBuffer1[iResult] = '\0';
 
-			unsigned long mode = 1;
-			iResult = ioctlsocket(serverSocket[connected], FIONBIO, &mode);
-			if (iResult != NO_ERROR)
-				printf("ioctlsocket failed with error: %ld\n", iResult);
+				jedanUzorak1 = (Merenje*)dataBuffer1;
 
-			connected++; //na pocetku je nula, gore iznad do, i onda povecava dok ne dodje do 2, to je dole implementirano
-			//dakle samo 2 klijenta u ovom slucaju
-			//na kraju ovog do, vracamo na 0
+				if (i == 0)
+				{
+					printf("\nNaziv grada: %s  \n", jedanUzorak1->nazivGrada);
+					printf("Index kvaliteta vazduha: %d  \n", jedanUzorak1->indexKvalitetaVazduha);
+					printf("_______________________________  \n");
+					printf("\nPodaci klijenta: %s : %d\n\n", inet_ntoa(clientAddr1.sin_addr), ntohs(clientAddr1.sin_port));
+
+					strcpy_s(prikuljeniPodaci1[i].nazivGrada, jedanUzorak1->nazivGrada);
+					prikuljeniPodaci1[i].indexKvalitetaVazduha = jedanUzorak1->indexKvalitetaVazduha;
+					i++;
+				}
+				else
+				{
+					printf("\nTrenutno uneti podaci :\n");
+					printf("\nNaziv grada: %s  \n", jedanUzorak1->nazivGrada);
+					printf("Index kvaliteta vazduha: %d  \n", jedanUzorak1->indexKvalitetaVazduha);
+					printf("_______________________________  \n");
+
+					if (jedanUzorak1->indexKvalitetaVazduha > 0)
+					{
+						strcpy_s(prikuljeniPodaci1[i].nazivGrada, jedanUzorak1->nazivGrada);
+						prikuljeniPodaci1[i].indexKvalitetaVazduha = jedanUzorak1->indexKvalitetaVazduha;
+						i++;
+
+						int j;
+						printf("\nPodaci koje imamo sacuvano :\n");
+						for (j = 0; j < i; j++) {
+							printf("\nNaziv grada: %s  \n", prikuljeniPodaci1[j].nazivGrada);
+							printf("Index kvaliteta vazduha: %d  \n", prikuljeniPodaci1[j].indexKvalitetaVazduha);
+							printf("_______________________________  \n");
+						}
+
+						int k, l;
+						int najgori = 0;
+						int index;
+						for (k = 0; k < i; k++)
+						{
+							int najgori = prikuljeniPodaci1[k].indexKvalitetaVazduha;
+							index = 0;
+							for (l = k + 1; l < i; l++)
+							{
+								if (prikuljeniPodaci1[l].indexKvalitetaVazduha > najgori)
+								{
+									najgori = prikuljeniPodaci1[l].indexKvalitetaVazduha;
+									index = l;
+								}
+							}
+
+							if (k = i)
+							{
+								printf("\nPodaci o najzagadjenijem gradu :\n");
+								printf("\nNaziv grada: %s  \n", prikuljeniPodaci1[index].nazivGrada);
+								printf("Index kvaliteta vazduha: %d  \n", prikuljeniPodaci1[index].indexKvalitetaVazduha);
+								printf("_______________________________  \n");
+							}
+						}
+
+						printf("\nPodaci klijenta: %s : %d\n\n", inet_ntoa(clientAddr1.sin_addr), ntohs(clientAddr1.sin_port));
+
+					}
+					else if (jedanUzorak1->indexKvalitetaVazduha < 0) {
+						char s[10] = "ODBACENO!";
+
+						iResult = send(acceptedSocket1, s, sizeof(s), 0);
+						if (iResult == SOCKET_ERROR)
+						{
+							printf("send failed with error: %d\n", WSAGetLastError());
+							shutdown(acceptedSocket1, SD_BOTH);
+							shutdown(acceptedSocket2, SD_BOTH);
+							closesocket(acceptedSocket1);
+							closesocket(acceptedSocket2);
+							break;
+						}
+
+						Sleep(3000);
+					}
+				}
+
+				char s[10] = "UNETO!";
+
+				iResult = send(acceptedSocket1, s, sizeof(s), 0);
+				if (iResult == SOCKET_ERROR)
+				{
+					printf("send failed with error: %d\n", WSAGetLastError());
+					shutdown(acceptedSocket1, SD_BOTH);
+					shutdown(acceptedSocket2, SD_BOTH);
+					closesocket(acceptedSocket1);
+					closesocket(acceptedSocket2);
+					break;
+				}
+			}
+			else {
+				char s[10] = "ODBACENO!";
+
+				iResult = send(acceptedSocket1, s, sizeof(s), 0);
+				if (iResult == SOCKET_ERROR)
+				{
+					printf("send failed with error: %d\n", WSAGetLastError());
+					shutdown(acceptedSocket1, SD_BOTH);
+					shutdown(acceptedSocket2, SD_BOTH);
+					closesocket(acceptedSocket1);
+					closesocket(acceptedSocket2);
+					break;
+				}
+			}
+		}
+		else if (iResult == 0)
+		{
+			// Connection was closed successfully
+			printf("Connection with first client closed.\n");
+			closesocket(acceptedSocket1);
+			closesocket(acceptedSocket2);
+			break;
 		}
 		else
 		{
 			if (WSAGetLastError() == WSAEWOULDBLOCK) {
-				Sleep(2000);
+				//Sleep(3000);
 			}
 			else
 			{
-				printf("error connection with client error: %d\n", WSAGetLastError());
-				closesocket(serverSocket[connected]);
-				WSACleanup();
-				return 1;
+				printf("recv failed with error: %d\n", WSAGetLastError());
+				closesocket(acceptedSocket1);
+				closesocket(acceptedSocket2);
+				break;
 			}
-
 		}
-
-		if (connected < 2)
-		{
-			continue; //preskace ostatak loopa (ostatak programa) dok se ne konektuje i drugi
-		}
-
-		// poruka uspesna prijava
-		strcpy_s(bafer, "Uspesna prijava");
-
-		iResult = sendto(serverSocket[0], bafer, strlen(bafer), 0, (SOCKADDR*)&clientAddr[0], clientAddrSize[0]);
-		if (iResult == SOCKET_ERROR)
-		{
-			printf("Error sending success message to socket 1 (%d)!\n", WSAGetLastError());
-			closesocket(serverSocket[0]);
-			WSACleanup();
-			return 1;
-		}
-
-		iResult = sendto(serverSocket[1], bafer, strlen(bafer), 0, (SOCKADDR*)&clientAddr[1], clientAddrSize[1]);
-		if (iResult == SOCKET_ERROR)
-		{
-			printf("Error sending success message to socket 2 (%d)!\n", WSAGetLastError());
-			closesocket(serverSocket[0]);
-			closesocket(serverSocket[1]);
-			WSACleanup();
-			return 1;
-		}
-
-		do
-		{
-			bool azurirao = false, dodao = false;
-
-			// prijem mernih podataka
-			iResult = recvfrom(serverSocket[0], bafer, BUFFER_SIZE, 0, (SOCKADDR*)&clientAddr[0], &clientAddrSize[0]);
-
-			if (iResult == SOCKET_ERROR)
+		
+		iResult = recv(acceptedSocket2, dataBuffer2, BUFFER_SIZE, 0);
+			if (iResult > 0)
 			{
-				continue;
-			}
+				if (x < 4) {
+					dataBuffer2[iResult] = '\0';
 
-			// podaci sa prve merne stanice
-			Merenje* tmp = (Merenje*)bafer;
+					jedanUzorak2 = (Merenje*)dataBuffer2;
 
-			Merenje noviZapis;
-			strcpy_s(noviZapis.nazivGrada, tmp->nazivGrada);
-			noviZapis.indeksKvalitetaVazduha = ntohs(tmp->indeksKvalitetaVazduha); // mora iz mreze u host
-
-			// provera meranja
-			int i = 0;
-			for (i = 0; i < lastIndex; i++)
-			{
-				if (strcmp(spisak[i].nazivGrada, noviZapis.nazivGrada) == 0)
-				{
-					// azurira se postojeci grad
-
-					if (noviZapis.indeksKvalitetaVazduha == -1)
+					if (x == 0)
 					{
-						Sleep(3000); // greska ceka se 3 sekunde
-						break;
+						printf("\nNaziv grada: %s  \n", jedanUzorak2->nazivGrada);
+						printf("Index kvaliteta vazduha: %d  \n", jedanUzorak2->indexKvalitetaVazduha);
+						printf("_______________________________  \n");
+						printf("\nPodaci klijenta: %s : %d\n\n", inet_ntoa(clientAddr2.sin_addr), ntohs(clientAddr2.sin_port));
+
+						strcpy_s(prikuljeniPodaci2[x].nazivGrada, jedanUzorak2->nazivGrada);
+						prikuljeniPodaci2[x].indexKvalitetaVazduha = jedanUzorak2->indexKvalitetaVazduha;
+						x++;
 					}
 					else
 					{
-						// azurira se grad
-						spisak[i].indeksKvalitetaVazduha = noviZapis.indeksKvalitetaVazduha; // upis novog indeksa
-						azurirao = true;
-						dodao = false;
-						break;
+						printf("\nTrenutno uneti podaci :\n");
+						printf("\nNaziv grada: %s  \n", jedanUzorak2->nazivGrada);
+						printf("Index kvaliteta vazduha: %d  \n", jedanUzorak2->indexKvalitetaVazduha);
+						printf("_______________________________  \n");
+
+						if (jedanUzorak2->indexKvalitetaVazduha > 0) 
+						{
+
+							strcpy_s(prikuljeniPodaci2[x].nazivGrada, jedanUzorak2->nazivGrada);
+							prikuljeniPodaci2[x].indexKvalitetaVazduha = jedanUzorak2->indexKvalitetaVazduha;
+							x++;
+
+							int u;
+							printf("\nPodaci koje imamo sacuvano :\n");
+							for (u = 0; u < x; u++) {
+								printf("\nNaziv grada: %s  \n", prikuljeniPodaci2[u].nazivGrada);
+								printf("Index kvaliteta vazduha: %d  \n", prikuljeniPodaci2[u].indexKvalitetaVazduha);
+								printf("_______________________________  \n");
+							}
+
+							int k, l;
+							int najgori = 0;
+							int index;
+							for (k = 0; k < x; k++)
+							{
+								int najgori = prikuljeniPodaci2[k].indexKvalitetaVazduha;
+								index = 0;
+								for (l = k + 1; l < x; l++)
+								{
+									if (prikuljeniPodaci2[l].indexKvalitetaVazduha > najgori)
+									{
+										najgori = prikuljeniPodaci2[l].indexKvalitetaVazduha;
+										index = l;
+									}
+								}
+
+								if (k = x)
+								{
+									printf("\nPodaci o najzagadjenijem gradu :\n");
+									printf("\nNaziv grada: %s  \n", prikuljeniPodaci2[index].nazivGrada);
+									printf("Index kvaliteta vazduha: %d  \n", prikuljeniPodaci2[index].indexKvalitetaVazduha);
+									printf("_______________________________  \n");
+								}
+							}
+
+							printf("\nPodaci klijenta: %s : %d\n\n", inet_ntoa(clientAddr2.sin_addr), ntohs(clientAddr2.sin_port));
+
+						}
+						else if (jedanUzorak2->indexKvalitetaVazduha < 0) {
+							char s[10] = "ODBACENO!";
+
+							iResult = send(acceptedSocket2, s, sizeof(s), 0);
+							if (iResult == SOCKET_ERROR)
+							{
+								printf("send failed with error: %d\n", WSAGetLastError());
+								shutdown(acceptedSocket1, SD_BOTH);
+								shutdown(acceptedSocket2, SD_BOTH);
+								closesocket(acceptedSocket1);
+								closesocket(acceptedSocket2);
+								break;
+							}
+
+							Sleep(3000); // 3sekunde
+						}
+
 					}
-				}
-			}
 
-			// ako grad ne postoji u spisku i nije preko 10, dodati ga
-			if (lastIndex < 10 && !azurirao)
-			{
-				strcpy_s(spisak[lastIndex].nazivGrada, noviZapis.nazivGrada);
-				spisak[lastIndex].indeksKvalitetaVazduha = noviZapis.indeksKvalitetaVazduha;
-				lastIndex++;
-				azurirao = false;
-				dodao = true;
-			}
-			else
-			{
-				lastIndex = 10;
-			}
+					char s[10] = "UNETO!";
 
-			// poruka uneto ili nije
-			// poruka klijentu
-			if (dodao || azurirao)
-			{
-				strcpy_s(bafer, "UNETO");
-				iResult = sendto(serverSocket[0], bafer, strlen(bafer), 0, (SOCKADDR*)&clientAddr[0], sizeof(clientAddr[0]));
-
-				if (iResult == SOCKET_ERROR)
-				{
-					printf("Error sending message to socket 1 (%d)!\n", WSAGetLastError());
-					closesocket(serverSocket[0]);
-					WSACleanup();
-					return 1;
-				}
-			}
-			else
-			{
-				strcpy_s(bafer, "ODBACENO");
-				iResult = sendto(serverSocket[0], bafer, strlen(bafer), 0, (SOCKADDR*)&clientAddr[0], sizeof(clientAddr[0]));
-
-				if (iResult == SOCKET_ERROR)
-				{
-					printf("Error sending message to socket 1 (%d)!\n", WSAGetLastError());
-					closesocket(serverSocket[0]);
-					WSACleanup();
-					return 1;
-				}
-			}
-
-			// druga merna stanica
-			iResult = recvfrom(serverSocket[1], bafer, BUFFER_SIZE, 0, (SOCKADDR*)&clientAddr[1], &clientAddrSize[1]);
-
-			if (iResult == SOCKET_ERROR)
-			{
-				continue;
-			}
-
-			// podaci sa druge merne stanice
-			strcpy_s(noviZapis.nazivGrada, tmp->nazivGrada);
-			noviZapis.indeksKvalitetaVazduha = ntohs(tmp->indeksKvalitetaVazduha); // mora iz mreze u host
-
-			azurirao = false;
-			dodao = false;
-
-			// provera meranja
-			i = 0;
-			for (i = 0; i < lastIndex; i++)
-			{
-				if (strcmp(spisak[i].nazivGrada, noviZapis.nazivGrada) == 0)
-				{
-					// azurira se postojeci grad
-
-					if (noviZapis.indeksKvalitetaVazduha == -1)
+					iResult = send(acceptedSocket2, s, sizeof(s), 0);
+					if (iResult == SOCKET_ERROR)
 					{
-						Sleep(3000); // greska ceka se 3 sekunde
+						printf("send failed with error: %d\n", WSAGetLastError());
+						shutdown(acceptedSocket1, SD_BOTH);
+						shutdown(acceptedSocket2, SD_BOTH);
+						closesocket(acceptedSocket1);
+						closesocket(acceptedSocket2);
 						break;
 					}
-					else
+				}
+				else
+				{
+					char s[10] = "ODBACENO!";
+
+					// Send message to clients using connected socket
+					iResult = send(acceptedSocket2, s, sizeof(s), 0);
+					if (iResult == SOCKET_ERROR)
 					{
-						// azurira se grad
-						spisak[i].indeksKvalitetaVazduha = noviZapis.indeksKvalitetaVazduha; // upis novog indeksa
-						azurirao = true;
-						dodao = false;
+						printf("send failed with error: %d\n", WSAGetLastError());
+						shutdown(acceptedSocket1, SD_BOTH);
+						shutdown(acceptedSocket2, SD_BOTH);
+						closesocket(acceptedSocket1);
+						closesocket(acceptedSocket2);
 						break;
 					}
 				}
 			}
-
-			// ako grad ne postoji u spisku i nije preko 10, dodati ga
-			if (lastIndex < 10 && !azurirao)
+			else if (iResult == 0)
 			{
-				strcpy_s(spisak[lastIndex].nazivGrada, noviZapis.nazivGrada);
-				spisak[lastIndex].indeksKvalitetaVazduha = noviZapis.indeksKvalitetaVazduha;
-				lastIndex++;
-				dodao = true;
-				azurirao = false;
+				printf("Connection with client closed.\n");
+				closesocket(acceptedSocket1);
+				closesocket(acceptedSocket2);
+				break;
 			}
 			else
 			{
-				lastIndex = 10;
-			}
-
-			// poruka klijentu
-			if (dodao || azurirao)
-			{
-				strcpy_s(bafer, "UNETO");
-				iResult = sendto(serverSocket[1], bafer, strlen(bafer), 0, (SOCKADDR*)&clientAddr[1], sizeof(clientAddr[1]));
-
-				if (iResult == SOCKET_ERROR)
+				if (WSAGetLastError() == WSAEWOULDBLOCK) 
 				{
-					printf("Error sending message to socket 2 (%d)!\n", WSAGetLastError());
-					closesocket(serverSocket[1]);
-					WSACleanup();
-					return 1;
+					//Sleep(3000);
 				}
-			}
-			else
-			{
-				strcpy_s(bafer, "ODBACENO");
-				iResult = sendto(serverSocket[1], bafer, strlen(bafer), 0, (SOCKADDR*)&clientAddr[1], sizeof(clientAddr[1]));
-
-				if (iResult == SOCKET_ERROR)
+				else
 				{
-					printf("Error sending message to socket 2 (%d)!\n", WSAGetLastError());
-					closesocket(serverSocket[1]);
-					WSACleanup();
-					return 1;
-				}
-			}
-
-			// ispis svih merenja
-			printf("\n---------------------------------------------------");
-			for (int j = 0; j < lastIndex; j++)
-			{
-				if (spisak[j].indeksKvalitetaVazduha == 0)
+					printf("recv failed with error: %d\n", WSAGetLastError());
+					closesocket(acceptedSocket1);
+					closesocket(acceptedSocket2);
 					break;
-
-				printf("\n%d. grad : ", j + 1);
-				printf("[%s, %hd]", spisak[j].nazivGrada, spisak[j].indeksKvalitetaVazduha);
+				}
 			}
-			printf("\n---------------------------------------------------\n");
-		} while (true);
-		connected = 0;
-	} while (true);
+	}
+}while (true);
 
-	// clean up
-	iResult = closesocket(serverSocket[0]);
-
+	iResult = shutdown(acceptedSocket1, SD_BOTH);
 	if (iResult == SOCKET_ERROR)
 	{
-		printf("Error closing socket 1 (%d)!\n", WSAGetLastError());
+		printf("shutdown failed with error: %d\n", WSAGetLastError());
+		closesocket(acceptedSocket1);
+		closesocket(acceptedSocket2);
 		WSACleanup();
 		return 1;
 	}
 
-	iResult = closesocket(serverSocket[1]);
-
+	iResult = shutdown(acceptedSocket2, SD_BOTH);
 	if (iResult == SOCKET_ERROR)
 	{
-		printf("Error closing socket 2 (%d)!\n", WSAGetLastError());
+		printf("shutdown failed with error: %d\n", WSAGetLastError());
+		closesocket(acceptedSocket1);
+		closesocket(acceptedSocket2);
 		WSACleanup();
 		return 1;
 	}
+
+	closesocket(listenSocket);
+	closesocket(acceptedSocket1);
+	closesocket(acceptedSocket2);
 
 	WSACleanup();
 
